@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import clientPromise from "@/lib/mongodb";
 import { ObjectId, type Document } from "mongodb";
+import { GoogleGenAI } from "@google/genai";
 import fs from "fs/promises";
 import path from "path";
 
@@ -27,7 +28,10 @@ export async function POST(
 
   const apiKey = process.env.GOOGLE_SPEECH_API_KEY;
   if (!apiKey) {
-    return NextResponse.json({ error: "Missing GOOGLE_SPEECH_API_KEY" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Missing GOOGLE_SPEECH_API_KEY" },
+      { status: 500 }
+    );
   }
 
   const client = await clientPromise;
@@ -50,17 +54,21 @@ export async function POST(
     const audioPath = path.join(process.cwd(), String(recording.audioPath));
     const audioBuffer = await fs.readFile(audioPath);
 
-    const { encoding, sampleRateHertz } = guessEncodingAndRate(recording.audioMimeType ?? null);
+    const { encoding, sampleRateHertz } = guessEncodingAndRate(
+      recording.audioMimeType ?? null
+    );
 
     const sttRes = await fetch(
-      `https://speech.googleapis.com/v1/speech:recognize?key=${encodeURIComponent(apiKey)}`,
+      `https://speech.googleapis.com/v1/speech:recognize?key=${encodeURIComponent(
+        apiKey
+      )}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           config: {
-            encoding,              // e.g., WEBM_OPUS
-            sampleRateHertz,       // must be allowed values for WEBM_OPUS
+            encoding, // e.g., WEBM_OPUS
+            sampleRateHertz, // allowed values for WEBM_OPUS
             languageCode: "en-US",
             enableAutomaticPunctuation: true,
           },
@@ -86,25 +94,82 @@ export async function POST(
 
     if (!text) throw new Error("Empty transcription");
 
+    // Gemini cleanup (punctuation/spacing only)
+    const cleanedText = await cleanupWithGemini(text);
+
+    // Save both raw + cleaned
     const ins = await transcripts.insertOne({
       recordingId: recording._id,
       sessionId: recording.sessionId ?? null,
-      text,
+      text, // raw STT
+      cleanText: cleanedText, // cleaned transcript
       createdAt: new Date(),
     });
 
     await recordings.updateOne(
       { _id: recording._id },
-      { $set: { status: "ready", transcriptId: ins.insertedId, updatedAt: new Date() } }
+      {
+        $set: {
+          status: "ready",
+          transcriptId: ins.insertedId,
+          updatedAt: new Date(),
+        },
+      }
     );
 
-    return NextResponse.json({ ok: true, transcript: text });
+    return NextResponse.json({
+      ok: true,
+      transcript: cleanedText,
+      rawTranscript: text,
+      transcriptId: ins.insertedId,
+    });
   } catch (err: any) {
     console.error(err);
+
     await recordings.updateOne(
       { _id: recording._id },
-      { $set: { status: "error", error: String(err?.message ?? err), updatedAt: new Date() } }
+      {
+        $set: {
+          status: "error",
+          error: String(err?.message ?? err),
+          updatedAt: new Date(),
+        },
+      }
     );
+
     return NextResponse.json({ error: "Transcription failed" }, { status: 500 });
   }
+}
+
+async function cleanupWithGemini(raw: string): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return raw;
+
+  const ai = new GoogleGenAI({ apiKey });
+
+  const result = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              "Clean up this transcript by fixing spacing, punctuation, capitalization, and adding paragraph breaks where natural.\n" +
+              "Rules:\n" +
+              "- Do NOT paraphrase or reword.\n" +
+              "- Do NOT add new information.\n" +
+              "- Do NOT remove words.\n" +
+              "- Keep the same language.\n" +
+              "- Return only the cleaned transcript text.\n\n" +
+              "TRANSCRIPT:\n" +
+              raw,
+          },
+        ],
+      },
+    ],
+  });
+
+  const cleaned = (result.text ?? "").trim();
+  return cleaned || raw;
 }
