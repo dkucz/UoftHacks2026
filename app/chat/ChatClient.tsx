@@ -83,13 +83,10 @@ export default function ChatClient() {
 
       if (!response.ok) {
         const errText = await response.text();
-<<<<<<< HEAD
         console.error("API /api/chat failed:", response.status, errText);
         setErrorMessage(`Chat API error ${response.status}: ${errText}`);
         return;
-=======
         throw new Error(errText || "Chat failed");
->>>>>>> 2285c02 (Fixed Gemini Chat)
       }
 
       const data = (await response.json()) as { reply?: string; error?: string };
