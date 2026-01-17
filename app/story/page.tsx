@@ -9,6 +9,7 @@ import { motion } from "motion/react";
 
 interface Story {
   id: string;
+  recordingId: string | null;
   title: string;
   excerpt: string;
   date: string;
@@ -19,25 +20,79 @@ interface Story {
 export default function StoryLibraryPage() {
   const router = useRouter();
   const [stories, setStories] = useState<Story[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem("family-stories");
-    if (!stored) return;
-    try {
-      const parsed = JSON.parse(stored) as Story[];
-      if (Array.isArray(parsed)) {
-        setStories(parsed);
+    let cancelled = false;
+
+    const loadStories = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/transcripts");
+        if (!res.ok) {
+          throw new Error("Unable to load stories.");
+        }
+        const json = (await res.json()) as {
+          transcripts?: {
+            id: string;
+            recordingId: string | null;
+            text: string;
+            createdAt?: string | null;
+            title?: string;
+          }[];
+        };
+
+        const mapped = (json.transcripts || []).map((t) => {
+          const created = t.createdAt ? new Date(t.createdAt) : null;
+          return {
+            id: t.id,
+            recordingId: t.recordingId,
+            title: t.title || "Untitled Story",
+            excerpt: (t.text || "").split("\n")[0] || "(No transcript yet.)",
+            date: created
+              ? created.toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })
+              : "Unknown date",
+            language: "English",
+            duration: "—",
+          } satisfies Story;
+        });
+
+        if (!cancelled) {
+          setStories(mapped);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setError(err?.message || "Failed to load stories.");
+          setStories([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
-    } catch {
-      setStories([]);
-    }
+    };
+
+    loadStories();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const displayStories = stories;
 
   const handleStoryClick = (story: Story) => {
+    if (story.recordingId) {
+      router.push(`/chat?id=${encodeURIComponent(story.recordingId)}`);
+      return;
+    }
     const params = new URLSearchParams({
-      transcript: `${story.excerpt} [Full story content would be loaded here...]`,
+      transcript: story.excerpt,
       title: story.title,
     });
     router.push(`/chat?${params.toString()}`);
@@ -71,67 +126,80 @@ export default function StoryLibraryPage() {
           </div>
         </motion.div>
 
-        {/* Stories Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {displayStories.map((story, index) => (
-            <motion.div
-              key={story.id}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.1 }}
-              whileHover={{ y: -5 }}
-            >
-              <Card
-                className="p-6 bg-white/90 backdrop-blur-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-amber-100 hover:border-amber-300"
-                onClick={() => handleStoryClick(story)}
+        {loading && (
+          <Card className="p-6 bg-white/90 border-2 border-amber-100">
+            <p className="text-amber-800">Loading stories...</p>
+          </Card>
+        )}
+
+        {error && (
+          <Card className="p-6 bg-white/90 border-2 border-red-200">
+            <p className="text-red-700">{error}</p>
+          </Card>
+        )}
+
+        {!loading && !error && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {displayStories.map((story, index) => (
+              <motion.div
+                key={story.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.1 }}
+                whileHover={{ y: -5 }}
               >
-                <div className="space-y-4">
-                  <div>
-                    <div className="flex items-start gap-3 mb-3">
-                      <Sparkles className="w-5 h-5 text-amber-600 flex-shrink-0 mt-1" />
-                      <h3 className="text-xl font-semibold text-amber-900">
-                        {story.title}
-                      </h3>
+                <Card
+                  className="p-6 bg-white/90 backdrop-blur-sm hover:shadow-xl transition-all duration-300 cursor-pointer border-2 border-amber-100 hover:border-amber-300"
+                  onClick={() => handleStoryClick(story)}
+                >
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-start gap-3 mb-3">
+                        <Sparkles className="w-5 h-5 text-amber-600 flex-shrink-0 mt-1" />
+                        <h3 className="text-xl font-semibold text-amber-900">
+                          {story.title}
+                        </h3>
+                      </div>
+                      <p className="text-amber-800 text-sm line-clamp-3 leading-relaxed font-serif italic">
+                        "{story.excerpt}"
+                      </p>
                     </div>
-                    <p className="text-amber-800 text-sm line-clamp-3 leading-relaxed font-serif italic">
-                      "{story.excerpt}"
-                    </p>
-                  </div>
 
-                  <div className="flex flex-wrap gap-4 text-sm text-amber-700 border-t border-amber-200 pt-4">
-                    <div className="flex items-center gap-1.5">
-                      <Clock className="w-4 h-4 text-amber-600" />
-                      <span>{story.duration}</span>
+                    <div className="flex flex-wrap gap-4 text-sm text-amber-700 border-t border-amber-200 pt-4">
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-4 h-4 text-amber-600" />
+                        <span>{story.duration}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Globe className="w-4 h-4 text-amber-600" />
+                        <span>{story.language}</span>
+                      </div>
+                      <div className="text-amber-600 font-medium">
+                        {story.date}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <Globe className="w-4 h-4 text-amber-600" />
-                      <span>{story.language}</span>
-                    </div>
-                    <div className="text-amber-600 font-medium">
-                      {story.date}
-                    </div>
-                  </div>
 
-                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                    <Button
-                      className="w-full gap-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 shadow-md"
-                      onClick={(e: any) => {
-                        e.stopPropagation();
-                        handleStoryClick(story);
-                      }}
-                    >
-                      <MessageSquare className="w-4 h-4" />
-                      Explore This Story
-                    </Button>
-                  </motion.div>
-                </div>
-              </Card>
-            </motion.div>
-          ))}
-        </div>
+                    <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                      <Button
+                        className="w-full gap-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 shadow-md"
+                        onClick={(e: any) => {
+                          e.stopPropagation();
+                          handleStoryClick(story);
+                        }}
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                        Explore This Story
+                      </Button>
+                    </motion.div>
+                  </div>
+                </Card>
+              </motion.div>
+            ))}
+          </div>
+        )}
 
         {/* Empty State */}
-        {displayStories.length === 0 && (
+        {!loading && !error && displayStories.length === 0 && (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}

@@ -20,23 +20,38 @@ export default function ChatClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const recordingId = useMemo(
-    () => searchParams.get("id") ?? "",
-    [searchParams]
-  );
+  const recordingId = useMemo(() => searchParams.get("id") ?? "", [searchParams]);
+  const [title, setTitle] = useState<string>("");
 
-  const title = useMemo(
-    () => searchParams.get("title") ?? "Family Story",
-    [searchParams]
-  );
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "assistant",
-      content: `Hello! I'm here to help you explore "${title}". Feel free to ask any questions about the story, and I'll provide answers based on its content.`,
-      timestamp: new Date(),
-    },
-  ]);
+  useEffect(() => {
+    if (!recordingId) return;
+
+    (async () => {
+      const res = await fetch(`/api/transcripts/${recordingId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setTitle(data.title || "Family Story");
+    })();
+  }, [recordingId]);
+
+  const [messages, setMessages] = useState<Message[]>([]);
+
+  useEffect(() => {
+    if (!title) return;
+
+    setMessages((prev) => {
+      if (prev.length > 0) return prev; // don't overwrite existing chat
+      return [
+        {
+          id: "1",
+          role: "assistant",
+          content: `Hello! I'm here to help you explore "${title}". Feel free to ask any questions about the story, and I'll provide answers based on its content.`,
+          timestamp: new Date(),
+        },
+      ];
+    });
+  }, [title]);
+
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

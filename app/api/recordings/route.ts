@@ -148,6 +148,7 @@ export async function POST(req: Request) {
       text: rawText,
       cleanText,
       createdAt: now,
+      title: title,
     });
 
     await recordings.updateOne(

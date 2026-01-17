@@ -20,6 +20,7 @@ export async function GET() {
         recordingId: t.recordingId ? String(t.recordingId) : null,
         text: t.cleanText ?? t.text ?? "",
         createdAt: t.createdAt ?? null,
+        title: t.title ?? "(missing title)",
       })),
     });
   } catch (err) {
