@@ -1,7 +1,7 @@
 // app/api/transcribe/route.ts
 import { NextResponse } from "next/server";
 import { SpeechClient } from "@google-cloud/speech";
-import { getDb } from "../../lib/mongodb";
+import { getDb } from "@/lib/mongodb";
 
 export const runtime = "nodejs"; // important: use Node runtime (not edge)
 
@@ -14,6 +14,11 @@ export async function POST(req: Request) {
       wavBase64?: string;
       languageCode?: string;
     };
+
+    const apiKey = process.env.GOOGLE_SPEECH_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: "Missing GOOGLE_SPEECH_API_KEY" }, { status: 500 });
+    }
 
     if (!wavBase64) {
       return NextResponse.json({ error: "Missing wavBase64" }, { status: 400 });

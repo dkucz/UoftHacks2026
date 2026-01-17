@@ -5,10 +5,15 @@ import { useRouter } from "next/navigation";
 import { Button } from "../../shared/ui/button";
 import { Card } from "../../shared/ui/card";
 import { Mic, Square, ArrowLeft, CheckCircle, Heart, Sparkles } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence } from "framer-motion";
 
 export default function RecordStoryPage() {
   const router = useRouter();
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const recordedBlobRef = useRef<Blob | null>(null);
+
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [hasRecorded, setHasRecorded] = useState(false);
@@ -67,104 +72,99 @@ export default function RecordStoryPage() {
     setIsRecording(true);
     setRecordingTime(0);
     setHasRecorded(false);
-    buffersRef.current = [];
+    chunksRef.current = [];
+    recordedBlobRef.current = null;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
 
-      const AudioContextAny = window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioContextAny();
-      audioCtxRef.current = ctx;
+      // Try to prefer webm/opus (Chrome/Edge). Safari may ignore and use mp4.
+      const options: MediaRecorderOptions = {};
+      if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+        options.mimeType = "audio/webm;codecs=opus";
+      }
 
-      inputSampleRateRef.current = ctx.sampleRate;
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
 
-      const source = ctx.createMediaStreamSource(stream);
-      sourceRef.current = source;
-
-      // Simple mic PCM capture (good for hackathon; works in Chrome)
-      const processor = ctx.createScriptProcessor(4096, 1, 1);
-      processorRef.current = processor;
-
-      processor.onaudioprocess = (e) => {
-        const input = e.inputBuffer.getChannelData(0);
-        buffersRef.current.push(new Float32Array(input));
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
 
-      source.connect(processor);
-      processor.connect(ctx.destination);
+      recorder.onstop = () => {
+        const mime = recorder.mimeType || "audio/webm";
+        recordedBlobRef.current = new Blob(chunksRef.current, { type: mime });
+
+        // stop mic tracks
+        stream.getTracks().forEach((t) => t.stop());
+
+        setHasRecorded(true);
+      };
+
+      recorder.start();
     } catch (e: any) {
       setError(e?.message || "Microphone permission denied");
       setIsRecording(false);
       setHasRecorded(false);
-      await cleanupAudio();
     }
   };
 
+
   const handleStopRecording = async () => {
     setIsRecording(false);
-    setHasRecorded(true);
-    await cleanupAudio();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
   };
+
 
   const handleSubmit = async () => {
     setError(null);
 
-    if (!hasRecorded || buffersRef.current.length === 0) {
+    const blob = recordedBlobRef.current;
+    if (!hasRecorded || !blob) {
       setError("No audio recorded.");
       return;
     }
 
     setBusy(true);
     try {
-      // Convert buffered PCM -> WAV 16k mono, base64 it, send to /api/transcribe
-      const wavBytes = encodeWav16kMono(buffersRef.current, inputSampleRateRef.current);
-      const wavBase64 = bytesToBase64(wavBytes);
+      // 1) Upload -> /api/recordings
+      const sessionId =
+        window.localStorage.getItem("sessionId") ||
+        (() => {
+          const id = crypto.randomUUID();
+          window.localStorage.setItem("sessionId", id);
+          return id;
+        })();
 
-      const resp = await fetch("/api/transcribe", {
+      const form = new FormData();
+      // filename extension helps your backend pick ext
+      const ext = blob.type.includes("mp4") ? "m4a" : "webm";
+      form.append("audio", blob, `recording.${ext}`);
+      form.append("title", "Family Story");
+      form.append("speakerName", ""); // optional
+
+      const uploadRes = await fetch("/api/recordings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          wavBase64,
-          languageCode: "en-US",
-        }),
+        headers: { "x-session-id": sessionId },
+        body: form,
       });
 
-      if (!resp.ok) throw new Error(await resp.text());
-      const data = await resp.json() as { id: string; title: string; transcript: string };
+      if (!uploadRes.ok) throw new Error(await uploadRes.text());
+      const uploadJson = await uploadRes.json();
+      const recordingId = uploadJson.recordingId;
 
-      // Optional: keep your existing StoryLibrary localStorage behavior
-      const newStory = {
-        id: data.id,
-        title: data.title,
-        excerpt: `${(data.transcript || "").split("\n")[0] || data.transcript}...`,
-        date: new Date().toLocaleDateString("en-US", {
-          month: "long",
-          day: "numeric",
-          year: "numeric",
-        }),
-        language: "English",
-        duration: formatTime(recordingTime),
-      };
-
-      const storedStories = window.localStorage.getItem("family-stories");
-      try {
-        const existingStories = storedStories ? JSON.parse(storedStories) : [];
-        if (Array.isArray(existingStories)) {
-          window.localStorage.setItem("family-stories", JSON.stringify([newStory, ...existingStories]));
-        } else {
-          window.localStorage.setItem("family-stories", JSON.stringify([newStory]));
-        }
-      } catch {
-        window.localStorage.setItem("family-stories", JSON.stringify([newStory]));
-      }
-
-      // Navigate to transcript screen
-      const params = new URLSearchParams({
-        transcript: data.transcript,
-        title: data.title,
+      // 2) Trigger transcription -> /api/recordings/:id/transcribe
+      const transcribeRes = await fetch(`/api/recordings/${recordingId}/transcribe`, {
+        method: "POST",
       });
-      router.push(`/transcript?${params.toString()}`);
+
+      if (!transcribeRes.ok) throw new Error(await transcribeRes.text());
+      const transcribeJson = await transcribeRes.json();
+      const transcriptText = transcribeJson.transcript ?? "";
+
+      // 3) Navigate (better: just pass the recordingId)
+      router.push(`/transcript?id=${recordingId}`);
     } catch (e: any) {
       setError(e?.message || "Transcription failed");
     } finally {
