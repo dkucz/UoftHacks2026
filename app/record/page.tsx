@@ -128,7 +128,6 @@ export default function RecordStoryPage() {
 
     setBusy(true);
     try {
-      // 1) Upload -> /api/recordings
       const sessionId =
         window.localStorage.getItem("sessionId") ||
         (() => {
@@ -138,11 +137,10 @@ export default function RecordStoryPage() {
         })();
 
       const form = new FormData();
-      // filename extension helps your backend pick ext
       const ext = blob.type.includes("mp4") ? "m4a" : "webm";
       form.append("audio", blob, `recording.${ext}`);
       form.append("title", "Family Story");
-      form.append("speakerName", ""); // optional
+      form.append("speakerName", "");
 
       const uploadRes = await fetch("/api/recordings", {
         method: "POST",
@@ -151,22 +149,14 @@ export default function RecordStoryPage() {
       });
 
       if (!uploadRes.ok) throw new Error(await uploadRes.text());
+
       const uploadJson = await uploadRes.json();
       const recordingId = uploadJson.recordingId;
 
-      // 2) Trigger transcription -> /api/recordings/:id/transcribe
-      const transcribeRes = await fetch(`/api/recordings/${recordingId}/transcribe`, {
-        method: "POST",
-      });
-
-      if (!transcribeRes.ok) throw new Error(await transcribeRes.text());
-      const transcribeJson = await transcribeRes.json();
-      const transcriptText = transcribeJson.transcript ?? "";
-
-      // 3) Navigate (better: just pass the recordingId)
-      router.push(`/transcript?id=${recordingId}`);
+      // Backend already transcribed. Go straight to transcript page.
+      router.push(`/transcript?id=${encodeURIComponent(recordingId)}`);
     } catch (e: any) {
-      setError(e?.message || "Transcription failed");
+      setError(e?.message || "Upload/transcription failed");
     } finally {
       setBusy(false);
     }
@@ -182,7 +172,7 @@ export default function RecordStoryPage() {
           className="flex items-center gap-4"
         >
           <Button
-            onClick={() => router.push("/home")}
+            onClick={() => router.push("/")}
             variant="ghost"
             size="icon"
             className="hover:bg-amber-100"
