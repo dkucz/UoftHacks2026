@@ -19,10 +19,12 @@ interface Message {
 export default function ChatClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const transcript = useMemo(
-    () => searchParams.get("transcript") ?? "No transcript provided.",
+
+  const recordingId = useMemo(
+    () => searchParams.get("id") ?? "",
     [searchParams]
   );
+
   const title = useMemo(
     () => searchParams.get("title") ?? "Family Story",
     [searchParams]
@@ -47,6 +49,11 @@ export default function ChatClient() {
   }, [messages]);
 
   const handleSendMessage = async () => {
+    if (!recordingId) {
+      setErrorMessage("Missing recording id. Please go back and open a story again.");
+      return;
+    }
+    
     if (!inputValue.trim()) return;
     setErrorMessage(null);
 
@@ -66,7 +73,7 @@ export default function ChatClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transcript,
+          recordingId,
           messages: [...messages, userMessage].map((message) => ({
             role: message.role,
             content: message.content,
@@ -75,7 +82,14 @@ export default function ChatClient() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to reach the model.");
+        const errText = await response.text();
+<<<<<<< HEAD
+        console.error("API /api/chat failed:", response.status, errText);
+        setErrorMessage(`Chat API error ${response.status}: ${errText}`);
+        return;
+=======
+        throw new Error(errText || "Chat failed");
+>>>>>>> 2285c02 (Fixed Gemini Chat)
       }
 
       const data = (await response.json()) as { reply?: string; error?: string };
