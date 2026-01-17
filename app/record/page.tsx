@@ -148,13 +148,8 @@ export default function RecordStoryPage() {
       const form = new FormData();
       const ext = blob.type.includes("mp4") ? "m4a" : "webm";
       form.append("audio", blob, `recording.${ext}`);
-<<<<<<< HEAD
-      form.append("title", "Family Story");
-      form.append("speakerName", "");
-=======
       form.append("title", storyTitle);
       form.append("speakerName", ""); // optional
->>>>>>> main
 
       const uploadRes = await fetch("/api/recordings", {
         method: "POST",
