@@ -92,7 +92,7 @@ export default function HomePage() {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
               <motion.div 
-                whileHover={{ scale: 1.05, y: -5 }}
+                
                 className="flex flex-col items-center text-center p-6 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl shadow-md"
               >
                 <div className="w-16 h-16 bg-gradient-to-br from-amber-400 to-orange-500 rounded-full flex items-center justify-center mb-4">
@@ -102,7 +102,6 @@ export default function HomePage() {
                 <p className="text-sm text-amber-800">Capture family memories with simple voice recording</p>
               </motion.div>
               <motion.div 
-                whileHover={{ scale: 1.05, y: -5 }}
                 className="flex flex-col items-center text-center p-6 bg-gradient-to-br from-rose-50 to-pink-50 rounded-2xl shadow-md"
               >
                 <div className="w-16 h-16 bg-gradient-to-br from-rose-400 to-pink-500 rounded-full flex items-center justify-center mb-4">
@@ -112,7 +111,6 @@ export default function HomePage() {
                 <p className="text-sm text-amber-800">Explore and understand your family's history</p>
               </motion.div>
               <motion.div 
-                whileHover={{ scale: 1.05, y: -5 }}
                 className="flex flex-col items-center text-center p-6 bg-gradient-to-br from-orange-50 to-amber-50 rounded-2xl shadow-md"
               >
                 <div className="w-16 h-16 bg-gradient-to-br from-orange-400 to-amber-500 rounded-full flex items-center justify-center mb-4">

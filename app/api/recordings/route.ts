@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import clientPromise from "@/lib/mongodb";
+import clientPromise from "../../../lib/mongodb";
 import { randomUUID } from "crypto";
 import path from "path";
 import fs from "fs/promises";
