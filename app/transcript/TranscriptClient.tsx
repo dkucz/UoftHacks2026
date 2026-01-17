@@ -13,6 +13,7 @@ type RecordingResponse = {
     _id: string;
     title?: string;
     status?: string;
+    createdAt?: string;
   };
 };
 
@@ -28,6 +29,8 @@ export default function TranscriptClient() {
   const id = useMemo(() => searchParams.get("id") ?? "", [searchParams]);
 
   const [title, setTitle] = useState("Untitled Family Story");
+  const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +53,21 @@ export default function TranscriptClient() {
         const recRes = await fetch(`/api/recordings/${id}`);
         if (!recRes.ok) throw new Error(await recRes.text());
         const recJson = (await recRes.json()) as RecordingResponse;
-        if (!cancelled) setTitle(recJson.recording.title || "Untitled Family Story");
+        const recTitle = recJson.recording.title || "";
+        const createdAt = recJson.recording.createdAt
+          ? new Date(recJson.recording.createdAt)
+          : new Date();
+        const formattedDate = createdAt.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+        const fallbackTitle = `Story 1 - ${formattedDate}`;
+        const nextTitle = recTitle || fallbackTitle;
+        if (!cancelled) {
+          setTitle(nextTitle);
+          setTitleDraft(nextTitle);
+        }
 
         // 2) get transcript text
         const tRes = await fetch(`/api/recordings/${id}/transcript`);
@@ -75,6 +92,31 @@ export default function TranscriptClient() {
   const handleStartChat = () => {
     if (!id) return;
     router.push(`/chat?id=${encodeURIComponent(id)}`);
+  };
+
+  const handleSaveTitle = async () => {
+    if (!id) return;
+    const trimmed = titleDraft.trim();
+    if (!trimmed || trimmed === title || savingTitle) return;
+
+    setSavingTitle(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/recordings/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!res.ok) {
+        throw new Error("Failed to update title.");
+      }
+      setTitle(trimmed);
+      setTitleDraft(trimmed);
+    } catch (e: any) {
+      setError(e?.message || "Failed to update title.");
+    } finally {
+      setSavingTitle(false);
+    }
   };
 
   return (
@@ -123,7 +165,29 @@ export default function TranscriptClient() {
                   <FileText className="w-6 h-6 text-amber-600" />
                   <span className="text-sm font-medium text-amber-700">Story Title</span>
                 </div>
-                <h2 className="text-2xl font-bold text-amber-900">{title}</h2>
+                <div className="flex flex-col gap-3">
+                  <Input
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    className="text-xl font-semibold border-2 border-amber-200 focus:border-amber-400"
+                    placeholder="Story title"
+                    disabled={loading || savingTitle}
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleSaveTitle}
+                      disabled={
+                        loading ||
+                        savingTitle ||
+                        !titleDraft.trim() ||
+                        titleDraft.trim() === title
+                      }
+                      className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700"
+                    >
+                      {savingTitle ? "Saving..." : "Save Title"}
+                    </Button>
+                  </div>
+                </div>
               </Card>
             </motion.div>
 
