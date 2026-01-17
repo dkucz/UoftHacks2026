@@ -32,6 +32,8 @@ export default function TranscriptClient() {
   const [title, setTitle] = useState("Untitled Family Story");
   const [titleDraft, setTitleDraft] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
+  const [titleSaveMessage, setTitleSaveMessage] = useState<string | null>(null);
+  const [titleSaveError, setTitleSaveError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +104,8 @@ export default function TranscriptClient() {
 
     setSavingTitle(true);
     setError(null);
+    setTitleSaveMessage(null);
+    setTitleSaveError(null);
     try {
       const res = await fetch(`/api/recordings/${id}`, {
         method: "PATCH",
@@ -113,8 +117,11 @@ export default function TranscriptClient() {
       }
       setTitle(trimmed);
       setTitleDraft(trimmed);
+      setTitleSaveMessage("Title saved.");
     } catch (e: any) {
-      setError(e?.message || "Failed to update title.");
+      const message = e?.message || "Failed to update title.";
+      setTitleSaveError(message);
+      setError(message);
     } finally {
       setSavingTitle(false);
     }
@@ -174,7 +181,7 @@ export default function TranscriptClient() {
                     placeholder="Story title"
                     disabled={loading || savingTitle}
                   />
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
                     <Button
                       onClick={handleSaveTitle}
                       disabled={
@@ -187,6 +194,12 @@ export default function TranscriptClient() {
                     >
                       {savingTitle ? "Saving..." : "Save Title"}
                     </Button>
+                    {titleSaveMessage && (
+                      <span className="text-sm text-green-700">{titleSaveMessage}</span>
+                    )}
+                    {titleSaveError && (
+                      <span className="text-sm text-rose-700">{titleSaveError}</span>
+                    )}
                   </div>
                 </div>
               </Card>
