@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "../../shared/ui/button";
 import { Card } from "../../shared/ui/card";
@@ -13,81 +13,170 @@ export default function RecordStoryPage() {
   const [recordingTime, setRecordingTime] = useState(0);
   const [hasRecorded, setHasRecorded] = useState(false);
 
+  const [busy, setBusy] = useState(false); // transcribing
+  const [error, setError] = useState<string | null>(null);
+
+  // Audio capture refs
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const buffersRef = useRef<Float32Array[]>([]);
+  const inputSampleRateRef = useRef<number>(48000);
+
   useEffect(() => {
-    let interval: number;
+    let interval: number | undefined;
     if (isRecording) {
-      interval = window.setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
+      interval = window.setInterval(() => setRecordingTime((prev) => prev + 1), 1000);
     }
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [isRecording]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const handleStartRecording = () => {
+  const cleanupAudio = async () => {
+    try {
+      processorRef.current?.disconnect();
+    } catch {}
+    try {
+      sourceRef.current?.disconnect();
+    } catch {}
+
+    processorRef.current = null;
+    sourceRef.current = null;
+
+    try {
+      await audioCtxRef.current?.close();
+    } catch {}
+    audioCtxRef.current = null;
+
+    try {
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    } catch {}
+    mediaStreamRef.current = null;
+  };
+
+  const handleStartRecording = async () => {
+    setError(null);
     setIsRecording(true);
     setRecordingTime(0);
     setHasRecorded(false);
+    buffersRef.current = [];
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const AudioContextAny = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContextAny();
+      audioCtxRef.current = ctx;
+
+      inputSampleRateRef.current = ctx.sampleRate;
+
+      const source = ctx.createMediaStreamSource(stream);
+      sourceRef.current = source;
+
+      // Simple mic PCM capture (good for hackathon; works in Chrome)
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+
+      processor.onaudioprocess = (e) => {
+        const input = e.inputBuffer.getChannelData(0);
+        buffersRef.current.push(new Float32Array(input));
+      };
+
+      source.connect(processor);
+      processor.connect(ctx.destination);
+    } catch (e: any) {
+      setError(e?.message || "Microphone permission denied");
+      setIsRecording(false);
+      setHasRecorded(false);
+      await cleanupAudio();
+    }
   };
 
-  const handleStopRecording = () => {
+  const handleStopRecording = async () => {
     setIsRecording(false);
     setHasRecorded(true);
+    await cleanupAudio();
   };
 
-  const handleSubmit = () => {
-    // Mock transcript - in production, this would come from speech-to-text API
-    const mockTranscript = `I remember when I was just a little girl, growing up in the old neighborhood. Your great-grandfather used to walk me to school every single morning, rain or shine. He'd hold my hand and tell me stories about when he first came to this country with nothing but a suitcase and a dream.
+  const handleSubmit = async () => {
+    setError(null);
 
-Those were different times, you know. We didn't have much, but we had each other. Sunday dinners were sacred in our family - everyone would gather around the table, and we'd share stories, laughter, and your great-grandmother's famous apple pie. She never wrote down the recipe, said it was all in the feel of the dough.
-
-I'm telling you these stories because they're important. They're part of who we are, where we came from. And I want you to remember them, to pass them on to your children someday.`;
-
-    const mockTitle = `Family Memory - ${new Date().toLocaleDateString()}`;
-    
-    const newStory = {
-      id: Date.now().toString(),
-      title: mockTitle,
-      excerpt: `${mockTranscript.split("\n")[0]}...`,
-      date: new Date().toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      }),
-      language: "English",
-      duration: formatTime(recordingTime),
-    };
-
-    const storedStories = window.localStorage.getItem("family-stories");
-    try {
-      const existingStories = storedStories ? JSON.parse(storedStories) : [];
-      if (Array.isArray(existingStories)) {
-        window.localStorage.setItem(
-          "family-stories",
-          JSON.stringify([newStory, ...existingStories])
-        );
-      }
-    } catch {
-      window.localStorage.setItem("family-stories", JSON.stringify([newStory]));
+    if (!hasRecorded || buffersRef.current.length === 0) {
+      setError("No audio recorded.");
+      return;
     }
 
-    const params = new URLSearchParams({
-      transcript: mockTranscript,
-      title: mockTitle,
-    });
-    router.push(`/transcript?${params.toString()}`);
+    setBusy(true);
+    try {
+      // Convert buffered PCM -> WAV 16k mono, base64 it, send to /api/transcribe
+      const wavBytes = encodeWav16kMono(buffersRef.current, inputSampleRateRef.current);
+      const wavBase64 = bytesToBase64(wavBytes);
+
+      const resp = await fetch("/api/transcribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wavBase64,
+          languageCode: "en-US",
+        }),
+      });
+
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = await resp.json() as { id: string; title: string; transcript: string };
+
+      // Optional: keep your existing StoryLibrary localStorage behavior
+      const newStory = {
+        id: data.id,
+        title: data.title,
+        excerpt: `${(data.transcript || "").split("\n")[0] || data.transcript}...`,
+        date: new Date().toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        }),
+        language: "English",
+        duration: formatTime(recordingTime),
+      };
+
+      const storedStories = window.localStorage.getItem("family-stories");
+      try {
+        const existingStories = storedStories ? JSON.parse(storedStories) : [];
+        if (Array.isArray(existingStories)) {
+          window.localStorage.setItem("family-stories", JSON.stringify([newStory, ...existingStories]));
+        } else {
+          window.localStorage.setItem("family-stories", JSON.stringify([newStory]));
+        }
+      } catch {
+        window.localStorage.setItem("family-stories", JSON.stringify([newStory]));
+      }
+
+      // Navigate to transcript screen
+      const params = new URLSearchParams({
+        transcript: data.transcript,
+        title: data.title,
+      });
+      router.push(`/transcript?${params.toString()}`);
+    } catch (e: any) {
+      setError(e?.message || "Transcription failed");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 p-6">
       <div className="max-w-3xl mx-auto space-y-6">
         {/* Header */}
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           className="flex items-center gap-4"
@@ -97,6 +186,7 @@ I'm telling you these stories because they're important. They're part of who we 
             variant="ghost"
             size="icon"
             className="hover:bg-amber-100"
+            disabled={busy}
           >
             <ArrowLeft className="w-5 h-5" />
           </Button>
@@ -107,11 +197,7 @@ I'm telling you these stories because they're important. They're part of who we 
         </motion.div>
 
         {/* Recording Card */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
           <Card className="p-10 bg-white/90 backdrop-blur-sm shadow-xl border-2 border-amber-100">
             <div className="space-y-8">
               {/* Instructions */}
@@ -125,12 +211,8 @@ I'm telling you these stories because they're important. They're part of who we 
                       exit={{ opacity: 0, y: -10 }}
                     >
                       <Heart className="w-12 h-12 mx-auto text-rose-500 mb-3" />
-                      <p className="text-xl text-amber-900 font-medium">
-                        Ready to capture a precious memory?
-                      </p>
-                      <p className="text-amber-700">
-                        Press the microphone button to begin recording
-                      </p>
+                      <p className="text-xl text-amber-900 font-medium">Ready to capture a precious memory?</p>
+                      <p className="text-amber-700">Press the microphone button to begin recording</p>
                     </motion.div>
                   )}
                   {isRecording && (
@@ -141,12 +223,8 @@ I'm telling you these stories because they're important. They're part of who we 
                       exit={{ opacity: 0, y: -10 }}
                     >
                       <Sparkles className="w-12 h-12 mx-auto text-amber-500 mb-3" />
-                      <p className="text-xl text-amber-900 font-medium">
-                        Recording your story...
-                      </p>
-                      <p className="text-amber-700">
-                        Take your time and share your memories naturally
-                      </p>
+                      <p className="text-xl text-amber-900 font-medium">Recording your story...</p>
+                      <p className="text-amber-700">Take your time and share your memories naturally</p>
                     </motion.div>
                   )}
                   {hasRecorded && !isRecording && (
@@ -156,11 +234,9 @@ I'm telling you these stories because they're important. They're part of who we 
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: -10 }}
                     >
-                      <p className="text-xl text-amber-900 font-medium">
-                        Recording complete! 
-                      </p>
+                      <p className="text-xl text-amber-900 font-medium">Recording complete!</p>
                       <p className="text-amber-700">
-                        Review and save your precious family story
+                        {busy ? "Transcribing with Google Speech-to-Text..." : "Review and save your precious family story"}
                       </p>
                     </motion.div>
                   )}
@@ -170,27 +246,25 @@ I'm telling you these stories because they're important. They're part of who we 
               {/* Recording Indicator */}
               <AnimatePresence>
                 {isRecording && (
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     exit={{ opacity: 0, scale: 0.8 }}
                     className="flex items-center justify-center gap-4 bg-gradient-to-r from-red-50 to-rose-50 rounded-2xl p-6"
                   >
                     <div className="relative">
-                      <motion.div 
+                      <motion.div
                         animate={{ scale: [1, 1.2, 1] }}
                         transition={{ repeat: Infinity, duration: 1.5 }}
                         className="w-6 h-6 bg-red-500 rounded-full"
-                      ></motion.div>
-                      <motion.div 
+                      />
+                      <motion.div
                         animate={{ scale: [1, 1.5, 1], opacity: [0.5, 0, 0.5] }}
                         transition={{ repeat: Infinity, duration: 1.5 }}
                         className="absolute inset-0 w-6 h-6 bg-red-500 rounded-full"
-                      ></motion.div>
+                      />
                     </div>
-                    <span className="text-4xl font-mono text-amber-900 font-semibold">
-                      {formatTime(recordingTime)}
-                    </span>
+                    <span className="text-4xl font-mono text-amber-900 font-semibold">{formatTime(recordingTime)}</span>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -210,6 +284,7 @@ I'm telling you these stories because they're important. They're part of who we 
                       <Button
                         onClick={handleStartRecording}
                         size="lg"
+                        disabled={busy}
                         className="w-40 h-40 rounded-full bg-gradient-to-br from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-2xl"
                       >
                         <Mic className="w-16 h-16" />
@@ -244,25 +319,21 @@ I'm telling you these stories because they're important. They're part of who we 
                       exit={{ opacity: 0, scale: 0.8 }}
                       className="text-center space-y-4"
                     >
-                      <motion.div
-                        initial={{ scale: 0 }}
-                        animate={{ scale: 1 }}
-                        transition={{ type: "spring", stiffness: 200, damping: 15 }}
-                      >
+                      <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 200, damping: 15 }}>
                         <CheckCircle className="w-24 h-24 mx-auto text-green-600" />
                       </motion.div>
-                      <p className="text-amber-900 font-medium text-lg">
-                        Recording saved ({formatTime(recordingTime)})
-                      </p>
+                      <p className="text-amber-900 font-medium text-lg">Recording saved ({formatTime(recordingTime)})</p>
                     </motion.div>
                   )}
                 </AnimatePresence>
               </div>
 
+              {error && <div className="text-center text-red-600">{error}</div>}
+
               {/* Action Buttons */}
               <AnimatePresence>
                 {hasRecorded && !isRecording && (
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -20 }}
@@ -271,15 +342,17 @@ I'm telling you these stories because they're important. They're part of who we 
                     <Button
                       onClick={handleStartRecording}
                       variant="outline"
+                      disabled={busy}
                       className="flex-1 border-2 border-amber-600 text-amber-900 hover:bg-amber-50"
                     >
                       Record Again
                     </Button>
                     <Button
                       onClick={handleSubmit}
+                      disabled={busy}
                       className="flex-1 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 shadow-lg"
                     >
-                      View Transcript
+                      {busy ? "Transcribing..." : "View Transcript"}
                     </Button>
                   </motion.div>
                 )}
@@ -288,12 +361,8 @@ I'm telling you these stories because they're important. They're part of who we 
           </Card>
         </motion.div>
 
-        {/* Tips */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-        >
+        {/* Tips (unchanged) */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
           <Card className="p-6 bg-white/70 backdrop-blur-sm border border-amber-200">
             <div className="flex items-start gap-3">
               <Sparkles className="w-6 h-6 text-amber-600 flex-shrink-0 mt-1" />
@@ -324,4 +393,90 @@ I'm telling you these stories because they're important. They're part of who we 
       </div>
     </div>
   );
+}
+
+/** ===== Helpers: PCM -> WAV 16k mono + base64 ===== */
+
+function encodeWav16kMono(chunks: Float32Array[], inputSampleRate: number): Uint8Array {
+  const input = concatFloat32(chunks);
+  const targetRate = 16000;
+
+  const resampled = resampleLinear(input, inputSampleRate, targetRate);
+  const pcm16 = floatTo16BitPCM(resampled);
+
+  const buffer = new ArrayBuffer(44 + pcm16.length * 2);
+  const view = new DataView(buffer);
+
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + pcm16.length * 2, true);
+  writeString(view, 8, "WAVE");
+
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+
+  writeString(view, 36, "data");
+  view.setUint32(40, pcm16.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < pcm16.length; i++) {
+    view.setInt16(offset, pcm16[i], true);
+    offset += 2;
+  }
+
+  return new Uint8Array(buffer);
+}
+
+function concatFloat32(chunks: Float32Array[]): Float32Array {
+  const total = chunks.reduce((acc, c) => acc + c.length, 0);
+  const out = new Float32Array(total);
+  let pos = 0;
+  for (const c of chunks) {
+    out.set(c, pos);
+    pos += c.length;
+  }
+  return out;
+}
+
+function resampleLinear(input: Float32Array, inRate: number, outRate: number): Float32Array {
+  if (inRate === outRate) return input;
+  const ratio = inRate / outRate;
+  const outLength = Math.floor(input.length / ratio);
+  const out = new Float32Array(outLength);
+
+  for (let i = 0; i < outLength; i++) {
+    const idx = i * ratio;
+    const i0 = Math.floor(idx);
+    const i1 = Math.min(i0 + 1, input.length - 1);
+    const frac = idx - i0;
+    out[i] = input[i0] * (1 - frac) + input[i1] * frac;
+  }
+  return out;
+}
+
+function floatTo16BitPCM(input: Float32Array): Int16Array {
+  const out = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
 }
