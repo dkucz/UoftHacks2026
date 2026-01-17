@@ -52,6 +52,38 @@ export default function HomePage() {
           </p>
         </motion.div>
 
+        {/* Main Actions */}
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.5 }}
+          className="space-y-4 pb-12"
+        >
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+            <Button 
+              onClick={() => handleNavigate("record")}
+              className="w-full py-8 text-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 shadow-lg hover:shadow-xl transition-all duration-300"
+              size="lg"
+            >
+              <Mic className="w-6 h-6 mr-3" />
+              Record a Family Story
+              <Sparkles className="w-5 h-5 ml-3" />
+            </Button>
+          </motion.div>
+
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+            <Button 
+              onClick={() => handleNavigate("library")}
+              variant="outline"
+              className="w-full py-6 text-lg border-2 border-amber-600 text-amber-900 hover:bg-amber-50 shadow-md hover:shadow-lg transition-all duration-300"
+            >
+              <Library className="w-5 h-5 mr-2" />
+              Browse Family Library
+              <Users className="w-5 h-5 ml-2" />
+            </Button>
+          </motion.div>
+        </motion.div>
+
         {/* Image Banner */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
@@ -123,37 +155,7 @@ export default function HomePage() {
           </Card>
         </motion.div>
 
-        {/* Main Actions */}
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.5 }}
-          className="space-y-4 pb-12"
-        >
-          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-            <Button 
-              onClick={() => handleNavigate("record")}
-              className="w-full py-8 text-xl bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 shadow-lg hover:shadow-xl transition-all duration-300"
-              size="lg"
-            >
-              <Mic className="w-6 h-6 mr-3" />
-              Record a Family Story
-              <Sparkles className="w-5 h-5 ml-3" />
-            </Button>
-          </motion.div>
-
-          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-            <Button 
-              onClick={() => handleNavigate("library")}
-              variant="outline"
-              className="w-full py-6 text-lg border-2 border-amber-600 text-amber-900 hover:bg-amber-50 shadow-md hover:shadow-lg transition-all duration-300"
-            >
-              <Library className="w-5 h-5 mr-2" />
-              Browse Family Library
-              <Users className="w-5 h-5 ml-2" />
-            </Button>
-          </motion.div>
-        </motion.div>
+        
       </div>
     </div>
   );
