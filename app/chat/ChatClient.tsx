@@ -82,7 +82,10 @@ export default function ChatClient() {
       });
 
       if (!response.ok) {
-        throw new Error("Failed to reach the model.");
+        const errText = await response.text();
+        console.error("API /api/chat failed:", response.status, errText);
+        setErrorMessage(`Chat API error ${response.status}: ${errText}`);
+        return;
       }
 
       const data = (await response.json()) as { reply?: string; error?: string };
