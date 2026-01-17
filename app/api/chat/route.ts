@@ -11,12 +11,9 @@ type ChatMessage = {
 };
 
 type ChatRequest = {
-  recordingId: string;       // <-- IMPORTANT: now we fetch transcript server-side
+  recordingId: string;
   messages: ChatMessage[];
 };
-
-// Create Gemini client once (server-only)
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 export async function POST(req: Request) {
   try {
@@ -33,45 +30,47 @@ export async function POST(req: Request) {
     const messages = Array.isArray(body.messages) ? body.messages : [];
 
     const userMessage = messages[messages.length - 1]?.content?.trim() ?? "";
+
     if (!recordingId) {
-      return NextResponse.json(
-        { error: "recordingId is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "recordingId is required." }, { status: 400 });
     }
     if (!ObjectId.isValid(recordingId)) {
       return NextResponse.json({ error: "Invalid recordingId." }, { status: 400 });
     }
     if (!userMessage) {
-      return NextResponse.json(
-        { error: "Message content is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Message content is required." }, { status: 400 });
     }
 
-    // 1) Retrieve transcript from MongoDB
+    // 1) Load recording -> transcriptId
     const client = await clientPromise;
     const db = client.db(process.env.MONGODB_DB ?? "living_dictionary");
     const recordings = db.collection<Document>("recordings");
+    const transcripts = db.collection<Document>("transcripts");
 
     const recording = await recordings.findOne(
       { _id: new ObjectId(recordingId) },
-      { projection: { transcription: 1, title: 1 } }
+      { projection: { transcriptId: 1, title: 1 } }
     );
 
     if (!recording) {
       return NextResponse.json({ error: "Recording not found." }, { status: 404 });
     }
 
-    const transcript = String(recording.transcription ?? "").trim();
-    if (!transcript) {
+    if (!recording.transcriptId) {
       return NextResponse.json(
-        { error: "Recording has no transcription." },
+        { error: "Recording has no transcript yet." },
         { status: 400 }
       );
     }
 
-    // 2) Build Gemini contents (grounded in transcript)
+    const tdoc = await transcripts.findOne({ _id: recording.transcriptId });
+    const transcript = String(tdoc?.cleanText ?? tdoc?.text ?? "").trim();
+
+    if (!transcript) {
+      return NextResponse.json({ error: "Transcript is empty." }, { status: 400 });
+    }
+
+    // 2) Build Gemini contents grounded in transcript
     const contents = [
       {
         role: "user" as const,
@@ -96,9 +95,11 @@ export async function POST(req: Request) {
       })),
     ];
 
-    // 3) Call Gemini API (THIS is the external request)
+    // 3) Call Gemini
+    const ai = new GoogleGenAI({ apiKey });
+
     const result = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.5-flash",
       contents,
       config: {
         temperature: 0.2,
